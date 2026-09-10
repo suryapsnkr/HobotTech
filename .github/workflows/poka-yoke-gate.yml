@@ -20,6 +20,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Set Up Terraform
+        uses: hashicorp/setup-terraform@v3
+
       - name: Set Up Python
         uses: actions/setup-python@v5
         with:
