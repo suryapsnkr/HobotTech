@@ -1,0 +1,51 @@
+name: Poka-Yoke Build Gate
+
+on:
+  push:
+    branches: [ main, staging ]
+  pull_request:
+    branches: [ main, staging ]
+
+jobs:
+  build-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set Up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install ruff gitleaks
+
+      - name: Execute Linter Gate (Poka-Yoke)
+        run: |
+          # Fail if formatting or linting errors are found
+          ruff check . --no-cache
+          ruff format --check . --no-cache
+
+      - name: Execute Security Scan Gate (Fail-Closed)
+        run: |
+          # Gitleaks v8.18.0+ fails the build with exit 1 if secrets are found.
+          # We also quarantine by uploading the leaks report as an artifact.
+          if gitleaks detect --source . --redact --verbose; then
+            echo "Security Scan Passed: No hardcoded secrets found."
+          else
+            echo "::error::CRITICAL SECURITY FAILURE: Hardcoded secrets detected."
+            # Failed to scan properly also fails the gate to prevent false-negative
+            exit 1
+          fi
+
+      - name: Quarantine on Failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quarantined-secret-report
+          path: |
+            gitleaks-report.json
+            ruff-report.txt
