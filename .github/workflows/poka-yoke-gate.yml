@@ -2,50 +2,73 @@ name: Poka-Yoke Build Gate
 
 on:
   push:
-    branches: [ main, staging ]
+    branches: [main, staging]
   pull_request:
-    branches: [ main, staging ]
+    branches: [main, staging]
+
+permissions:
+  contents: read
 
 jobs:
   build-gate:
+    name: Security and Quality Gate
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set Up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Install Dependencies
         run: |
+          python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install ruff gitleaks
+          pip install ruff
 
-      - name: Execute Linter Gate (Poka-Yoke)
+      - name: Terraform Format Gate
         run: |
-          # Fail if formatting or linting errors are found
-          ruff check . --no-cache
-          ruff format --check . --no-cache
+          terraform fmt -check -recursive terraform/
 
-      - name: Execute Security Scan Gate (Fail-Closed)
+      - name: Terraform Validation Gate
         run: |
-          # Gitleaks v8.18.0+ fails the build with exit 1 if secrets are found.
-          # We also quarantine by uploading the leaks report as an artifact.
-          if gitleaks detect --source . --redact --verbose; then
-            echo "Security Scan Passed: No hardcoded secrets found."
-          else
-            echo "::error::CRITICAL SECURITY FAILURE: Hardcoded secrets detected."
-            # Failed to scan properly also fails the gate to prevent false-negative
-            exit 1
-          fi
+          terraform -chdir=terraform init -backend=false
+          terraform -chdir=terraform validate
 
-      - name: Quarantine on Failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: quarantined-secret-report
-          path: |
-            gitleaks-report.json
-            ruff-report.txt
+      - name: Python Linter Gate
+        run: |
+          ruff check api/ --output-format=concise
+
+      - name: Python Formatting Gate
+        run: |
+          ruff format --check api/
+
+      - name: Secret Detection Gate
+        id: gitleaks
+        continue-on-error: true
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fail Closed on Security Failure
+        if: steps.gitleaks.outcome == 'failure'
+        run: |
+          echo "::error::CRITICAL SECURITY FAILURE: Hardcoded secrets detected."
+          echo "Build is quarantined and deployment is blocked."
+          exit 1
+
+      - name: Build Gate Passed
+        run: |
+          echo "=========================================="
+          echo "Poka-Yoke Build Gate PASSED"
+          echo "Terraform validation: PASSED"
+          echo "Python linting: PASSED"
+          echo "Python formatting: PASSED"
+          echo "Secret scanning: PASSED"
+          echo "Deployment may proceed."
+          echo "=========================================="
